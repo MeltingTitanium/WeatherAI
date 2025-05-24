@@ -53,7 +53,7 @@
     class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center py-10"
   >
     <h1 class="text-3xl font-bold mb-6">
-      Weather  <span class="text-pink-400">+</span> Outfit Recommendations
+      Weather <span class="text-pink-400">+</span> Outfit Recommendations
     </h1>
 
     <div
@@ -76,17 +76,38 @@
         </button>
       </div>
 
-      <!-- Hugging Face API credentials -->
-      <h2 class="text-md font-semibold mt-8 mb-2">Hugging Face Inference API</h2>
-      <label for="hfTokenInput" class="block text-sm"
-        >API Token (stored locally)</label
+      <!-- AIMLAPI credentials -->
+      <h2 class="text-md font-semibold mt-8 mb-2">AI/ML API (aimlapi.com)</h2>
+      <label for="apiTokenInput" class="block text-sm"
+        >API Key (stored locally)</label
       >
       <input
-        id="hfTokenInput"
+        id="apiTokenInput"
         type="password"
         class="mt-1 block w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-md p-2"
-        placeholder="hf_**********************************"
+        placeholder="sk-********************************"
       />
+
+      <!-- Model selection (shown after API key is provided) -->
+      <div id="modelWrapper" class="hidden">
+        <label for="modelSelect" class="block text-sm font-medium mt-4"
+          >Model</label
+        >
+        <select
+          id="modelSelect"
+          class="mt-1 block w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-pink-500"
+        >
+          <option value="gpt-4o-mini" selected>Default GPT-4o Mini</option>
+		  <option value="gemini-1.5-flash" selected>Gemini-1.5-flash</option>
+		  <option value="Gemma-3-27B">Gemma 3 27B</option>
+          <option value="gpt-4o">GPT-4o (Pro)</option>
+          <option value="deepseek-v3">DeepSeek V3 (Pro)</option>
+		 
+          
+            
+          </option>
+        </select>
+      </div>
 
       <!-- -------------------- Data Wrapper -------------------- -->
       <div id="dataWrapper" class="flex flex-col gap-6 mt-8 hidden">
@@ -133,23 +154,34 @@
       const forecastEl = document.getElementById("forecast");
       const aiResultEl = document.getElementById("aiResult");
       const dataWrapper = document.getElementById("dataWrapper");
-      const hfTokenInput = document.getElementById("hfTokenInput");
+      const apiTokenInput = document.getElementById("apiTokenInput");
+      const modelSelect = document.getElementById("modelSelect");
+      const modelWrapper = document.getElementById("modelWrapper");
       const loader = document.getElementById("loader");
       const statusText = document.getElementById("statusText");
 
       /* ----------------------------------------------------
        *  Local-storage token persistence
        * -------------------------------------------------- */
-      const savedToken = localStorage.getItem("hfToken");
-      if (savedToken) hfTokenInput.value = savedToken;
+      const savedToken = localStorage.getItem("aimlToken");
+      if (savedToken) {
+        apiTokenInput.value = savedToken;
+        modelWrapper.classList.remove("hidden");
+      }
 
       let tokenTimer;
-      hfTokenInput.addEventListener("input", () => {
+      apiTokenInput.addEventListener("input", () => {
         clearTimeout(tokenTimer);
-        tokenTimer = setTimeout(
-          () => localStorage.setItem("hfToken", hfTokenInput.value.trim()),
-          400
-        );
+        tokenTimer = setTimeout(() => {
+          const trimmed = apiTokenInput.value.trim();
+          if (trimmed) {
+            localStorage.setItem("aimlToken", trimmed);
+            modelWrapper.classList.remove("hidden");
+          } else {
+            localStorage.removeItem("aimlToken");
+            modelWrapper.classList.add("hidden");
+          }
+        }, 400);
       });
 
       /* ----------------------------------------------------
@@ -275,12 +307,12 @@
       }
 
       /* ----------------------------------------------------
-       *  AI helper
+       *  AI helper (aimlapi.com chat completion)
        * -------------------------------------------------- */
       async function fetchAIMessage(locationLabel) {
-        const token = hfTokenInput.value.trim();
+        const token = apiTokenInput.value.trim();
         if (!token) {
-          aiResultEl.textContent = "Provide a Hugging Face API token.";
+          aiResultEl.textContent = "Provide an AIMLAPI key.";
           return;
         }
         if (!currentWx || !tomorrowWx) {
@@ -289,17 +321,27 @@
         }
 
         // Persist token immediately
-        localStorage.setItem("hfToken", token);
+        localStorage.setItem("aimlToken", token);
 
         const todayDesc = codeMap[currentWx.code] || "";
         const tomorrowDesc = codeMap[tomorrowWx.code] || "";
 
-        const prompt = `Location: ${locationLabel}. Today: ${currentWx.temp}°C, ${todayDesc}, wind ${currentWx.wind} km/h. Tomorrow: high ${tomorrowWx.hi}°C, low ${tomorrowWx.lo}°C, ${tomorrowDesc}.\n\nSummarize todays weather and recommend what to wear for today in 1 sentence. Then, summarize tomorrows weather and recommend what to wear for tomorrow in 1 sentence. `;
+        const prompt = `Location: ${locationLabel}. Today: ${currentWx.temp}°C, ${todayDesc}, wind ${currentWx.wind} km/h. Tomorrow: high ${tomorrowWx.hi}°C, low ${tomorrowWx.lo}°C, ${tomorrowDesc}.\n\nSummarize today's weather and recommend what to wear for today in 1 sentence. Then, summarize tomorrow's weather and recommend what to wear for tomorrow in 1 sentence.`;
+
+        const selectedModel = modelSelect.value || "gpt-4o-mini";
 
         const body = {
-          inputs: prompt,
-          parameters: { max_new_tokens: 120, return_full_text: false },
-          options: { wait_for_model: true },
+          model: selectedModel,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a concise fashion adviser. Respond exactly with two sentences, one for today and one for tomorrow.",
+            },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.7,
+          max_tokens: 120,
         };
 
         // UI state → loading
@@ -309,7 +351,7 @@
 
         try {
           const res = await fetch(
-            `https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta`,
+            "https://api.aimlapi.com/v1/chat/completions",
             {
               method: "POST",
               headers: {
@@ -319,26 +361,29 @@
               body: JSON.stringify(body),
             }
           );
-          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+
+          if (!res.ok) {
+            // Custom handling for rate limit (403)
+            const errMsg = res.status === 403
+              ? "Ratelimited"
+              : `${res.status} ${res.statusText}`;
+            throw new Error(errMsg);
+          }
 
           const json = await res.json();
-          let content =
-            Array.isArray(json) && json[0].generated_text
-              ? json[0].generated_text
+          const content =
+            json.choices && json.choices.length
+              ? json.choices[0].message.content.trim()
               : JSON.stringify(json);
-
-          // ---- Strip any prompt echo or location preamble ---- //
-          content = content
-            .replace(
-              /^Location:[\s\S]*?recommend what to wear for each day\.\s*/i,
-              ""
-            )
-            .replace(/^Location:[^\n]*\n?/i, "")
-            .trim();
 
           aiResultEl.textContent = content || "No content.";
         } catch (err) {
-          aiResultEl.textContent = `AI error: ${err.message}`;
+          // Display custom rate-limit message without the "AI error:" prefix
+          if (err.message === "Ratelimit for this model reached!") {
+            aiResultEl.textContent = err.message;
+          } else {
+            aiResultEl.textContent = `AI error: ${err.message}`;
+          }
         } finally {
           loader.classList.add("hidden");
           statusText.textContent = "";
